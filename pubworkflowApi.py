@@ -18,7 +18,7 @@ from string import Template
 
 import requests
 from flask import Response, request, Flask, jsonify
-from pyDaRUS.functions.validate import Validation
+# from pyDaRUS.functions.validate import Validation
 from requests.auth import HTTPBasicAuth
 
 from pubWorkflowExceptions import ApiCallFailedException
@@ -95,7 +95,7 @@ class Publication:
         self.appStatus = "undefined"
         self.connOpen = False
         self.calledMethod = None
-        self.validation = Validation(credentials["darus"]["baseUrl"], credentials["darus"]["apiKey"])
+        # self.validation = Validation(credentials["darus"]["baseUrl"], credentials["darus"]["apiKey"])
 
         self.args = {}
         self.connectToDb("db/pubworkflow.db")
@@ -633,7 +633,7 @@ class Publication:
         return wrapped
 
     def validate_and_format(self, tplDict, invocationId):
-        validation_out = self.validation.validate_dataset(tplDict["datasetId"])
+        # validation_out = self.validation.validate_dataset(tplDict["datasetId"])
 
         if type(validation_out) == str:
             validation_json = json.loads(validation_out)
