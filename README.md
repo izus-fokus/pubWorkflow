@@ -40,7 +40,7 @@ credentials.json has different options for configuration for the "darus" object:
     "authKey":"keWrKrjweILmewrEw",
     "mailer":"False",
     "debug":"True",
-    "validation":"True"
+    "validation":"False"
     "validationJSON":"False"
 ```
 
