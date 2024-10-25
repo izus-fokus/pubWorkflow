@@ -1,0 +1,8 @@
+.idea/
+.venv/
+.vscode/
+__pycache__/
+*/*.pyc
+tests/*/*.pyc
+tests/pubWorkflow*
+tests/pubworkflow*

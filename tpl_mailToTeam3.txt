@@ -1,0 +1,21 @@
+Ein neuer Veröffentlichungsworkflow wurde gestartet. 
+
+Titel: $datasetDisplayName
+Link: $datasetUrl
+
+
+Weitere Informationen
+$description
+
+
+Veröffentlichung freigeben: $releaseUrl
+Locks entfernen, um zu bearbeiten: $removeLockUrl
+Datensatz wieder sperren: $lockUrl
+Veröffentlichung abbrechen: $cancelUrl
+# File DOIS deaktivieren: $fileDoisOffUrl
+# File DOIS aktivieren: $fileDoisOnUrl
+$numberOfFiles
+
+$validationOutput
+
+$errors

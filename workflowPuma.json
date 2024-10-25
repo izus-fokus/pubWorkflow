@@ -1,0 +1,37 @@
+{
+    "name": "PUMA Export Workflow",
+    "steps": [
+        {
+            "provider":":internal",
+            "stepType":"log",
+            "parameters": {
+                "step":1,
+                "stepName":"Log",
+		"aMessage":"Start exporting dataset '${dataset.displayName}' with ID ${dataset.id} and invocation id ${invocationId} to PUMA"
+            }
+        },
+        {
+            "provider":":internal",
+            "stepType":"log",
+            "parameters": {
+                "step":2,
+                "stepName":"Log",
+		"number":2,
+                "anotherMessage": "pause workflow and trigger service"
+            }
+        },
+	{
+	    "provider":":internal",
+	    "stepType":"http/sr",
+	    "parameters": {
+		"url":"http://127.0.0.1:5000/pubWorkflow/${invocationId}?action=exportToPuma&authKey=cdL5k1jGz00ZDm2IUe20&datasetId=${dataset.id}&datasetGlobalId=${dataset.globalId}",
+		"method":"PUT",
+		"contentType":"text/plain",
+		"body":"authKey=cdL5k1jGz00ZDm2IUe20'&datasetId=${dataset.id}&invocationId=${invocationId}&datasetIdentifier=${dataset.identifier}&datasetGlobalId=${dataset.globalId}&datasetDisplayName=${dataset.displayName}&datasetCitation=${dataset.citation}&minorVersion=${minorVersion}&majorVersion=${majorVersion}&releaseStatus=${releaseStatus}",
+		"expectedResponse":".*ok.*",
+		"rollbackUrl":"http://localhost:8090/pubWorkflow/${invocationId}?action=pumaRollback",
+		"rollbackMethod":"PUT"
+	    }
+	}
+    ]
+}

@@ -1,0 +1,38 @@
+{
+    "name": "Publication Workflow",
+    "steps": [
+        {
+            "provider":":internal",
+            "stepType":"log",
+            "parameters": {
+                "step":1,
+                "stepName":"Log",
+                "aMessage":"Start publishing dataset ..."
+            }
+        },
+        {
+            "provider":":internal",
+            "stepType":"log",
+            "parameters": {
+                "step":2,
+                "stepName":"Log",
+                "number":2,
+                "anotherMessage": "pause workflow and trigger service"
+            }
+        },
+        {
+        "stepType": "http/sr",
+        "provider": ":internal",
+        "parameters": {
+          "rollbackUrl": "http://127.0.0.1:5004/__dataverse_tools__/pubWorkflowMail/error/${dataset.globalId}/12345",
+          "contentType": "application/json",
+          "body": "{\"authKey\":\"12345\",\"datasetId\":\"${dataset.id}\",\"invocationId\":\"${invocationId}\",\"datasetIdentifier\":\"${dataset.identifier}\",\"datasetGlobalId\":\"${dataset.globalId}\",\"datasetDisplayName\":\"A new dataset\",\"minorVersion\":\"${minorVersion}\",\"majorVersion\":\"${majorVersion}\",\"releaseStatus\":\"${releaseStatus}\"}",
+          "url": "http://127.0.0.1:5003/__dataverse_tools__/pubWorkflow/${invocationId}/12345",
+          "expectedResponse": ".*OK.*",
+          "method": "POST",
+          "method-rollback": "GET"
+        },
+        "requiredSettings": {}
+      }
+    ]
+}

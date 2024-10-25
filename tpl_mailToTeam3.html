@@ -1,0 +1,28 @@
+<html>
+ <head></head>
+ <body>
+<p>Ein neuer Veröffentlichungsworkflow wurde gestartet. </p>
+
+<p>Titel: $datasetDisplayName<br/>
+Link: $datasetUrl</p>
+
+<p>Weitere Informationen<br/>
+$descriptionHtml</p>
+
+<p><a href="$releaseUrl">Veröffentlichung freigeben </a></p>
+<p><a href="$removeLockUrl">Locks entfernen, um zu bearbeiten </a></p>
+<p><a href="$lockUrl">Datensatz wieder sperren </a></p>
+<p><a href="$cancelUrl">Veröffentlichung abbrechen </a></p>
+<br>
+<div id="close"><p><a href="$validateUrl"><i>Datensatz erneut validieren</i></a></p></div>
+<br>
+<p>$numberOfFiles</p>
+<!--<p><a href="$fileDoisOffUrl">File DOIs deaktivieren </a></p>-->
+<!--<p><a href="$fileDoisOnUrl">File DOIs aktivieren </a></p>-->
+
+<p>Validation Report<br/>
+$validationOutputHtml<p>
+
+<p>$errors</p>
+</body>
+</html>

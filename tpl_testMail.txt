@@ -1,0 +1,4 @@
+Test des Mailservers hat funktioniert
+
+Datum: $date
+Server: $server
