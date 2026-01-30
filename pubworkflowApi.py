@@ -8,6 +8,7 @@ import string
 import sys
 import re
 import asyncio
+import time
 from datetime import datetime
 from email.message import EmailMessage
 from email.mime.multipart import MIMEMultipart
@@ -18,7 +19,7 @@ from string import Template
 
 import requests
 from flask import Response, request, Flask, jsonify
-# from pyDaRUS.functions.validate import Validation
+#from dvValidation.functions.validate import Validation
 from requests.auth import HTTPBasicAuth
 
 from pubWorkflowExceptions import ApiCallFailedException
@@ -72,13 +73,19 @@ def valid_uuid(uuid):
     return bool(match)
 
 def valid_action(action):
-    regex = re.compile('removeLock|addLock|cancel|ok|validate')
+    regex = re.compile('removeLock|addLock|cancel|ok|validate|fokusreview|authorreview|deletelabel')
     match = regex.match(action)
     return bool(match)
 
 def dummy_apiurl(apiurl):
     if apiurl == "http://localhost:8080":
         return True
+
+def stringToBool(boolValue):
+    if boolValue == "True":
+        return True
+    elif boolValue == "False":
+        return False
 
 with open("bootstrap.min.css", "r") as css_file:
     bootstrapcss = css_file.read()
@@ -95,9 +102,11 @@ class Publication:
         self.appStatus = "undefined"
         self.connOpen = False
         self.calledMethod = None
-        # self.validation = Validation(credentials["darus"]["baseUrl"], credentials["darus"]["apiKey"])
+        if stringToBool(credentials["darus"]["validation"]):
+            self.validation = Validation(credentials["darus"]["baseUrl"], credentials["darus"]["apiKey"])
 
         self.args = {}
+        self.curationlabels = {"fokus": "In Review by FoKUS", "author": "Waiting for Feedback from Author"}
         self.connectToDb("db/pubworkflow.db")
 
     def __del__(self):
@@ -457,6 +466,7 @@ class Publication:
         return validation_output
 
     def set_validation_output(self, validation_json, tplDict):
+        noError = True
         try:
             validation_output = "<!DOCTYPE html><html><head>"+self.getValidationStyle()+"</head>"
             if not validation_json["citation"].get("author") == None:
@@ -514,66 +524,117 @@ class Publication:
                 if not validation_json["citation"]["keyword"].get("0") == None:
                     for keywords in validation_json["citation"]["keyword"]:
                         for vocabulary in validation_json["citation"]["keyword"][keywords]:
-                            if not vocabulary.get("message") == "Keyword not found" and not vocabulary.get("message") == "API down":
+                            if type(vocabulary) is list:
+                                for vocab in vocabulary:
+                                    validate_four = vocab["proposed-changes"]
+                                    validate_message = vocab["message"]
+                                    if type(validate_four) is list:
+                                        counter = 0
+                                        validation_output = (validation_output + (
+                                                        "<p><div class='highlight'>"
+                                                        + validate_message
+                                                        + "</div><table class='table table-striped tablesize table-bordered'>"
+                                                          "<thead><tr><th>Keyword</th><th>Vocabulary</th><th>URI</th></tr>"
+                                                          "</thead><tbody>"))
+                                        for keyword in validate_four:
+                                            if counter == 8:
+                                                break
+                                            counter += 1
+                                            validation_output = ((validation_output + "<tr><td><span "
+                                                                    "class='d-inline-block' tabindex='0' "
+                                                                    "data-toggle='tooltip' " + "title='" +
+                                                                    keyword["description"] + "'>" + "<a href='" +
+                                                                    keyword["vocabulary_url"] + "'>" + keyword["term"]
+                                                                      + "</a>" + "</span>" + "</td><td>" +
+                                                                    keyword["vocabulary"] + "</td><td>" +
+                                                                    keyword["vocabulary_url"]) + "</td></tr>")
+                                        validation_output = validation_output + "</tbody></table></p>"
+                                    elif type(validate_four) is str:
+                                        validation_output = (validation_output + (
+                                                    "<p><div class='highlight'>"
+                                                    + validate_message + " mit Nachricht: "
+                                                    + validate_four + "</div></p>"))
+                            elif type(vocabulary) is dict:
                                 validate_four = vocabulary["proposed-changes"]
                                 validate_message = vocabulary["message"]
-                                counter = 0
-                                validation_output = \
-                                    (validation_output
-                                     + ("<p><div class='highlight'>"
-                                        + validate_message
-                                        + "</div><table class='table table-striped tablesize table-bordered'><thead><tr>"
-                                          "<th>Keyword</th>"
-                                          "<th>Vocabulary</th>"
-                                          "<th>URI</th></tr></thead><tbody>"))
-                                for keyword in validate_four:
-                                    if counter == 8:
-                                        break
-                                    counter += 1
-                                    validation_output = \
-                                        ((validation_output
-                                          + "<tr><td><span class='d-inline-block' tabindex='0' data-toggle='tooltip' "
-                                          +  "title='" + keyword["description"] + "'>"
-                                          +  "<a href='" + keyword["vocabulary_url"] + "'>"
-                                          + keyword["term"]
-                                          + "</a>"
-                                          + "</span>"
-                                          + "</td><td>"
-                                          + keyword["vocabulary"]
-                                          + "</td><td>"
-                                          + keyword["vocabulary_url"]) + "</td></tr>")
-                                validation_output = validation_output + "</tbody></table></p>"
-                            elif vocabulary.get("message") == "API down":
-                                validate_message = vocabulary.get("proposed-changes")
-                                validation_output = (validation_output + ("<p><div class='highlight'>" + validate_message + "</div></p>"))
-                            elif vocabulary.get("message") == "Keyword not found":
-                                validate_message = vocabulary.get("proposed-changes")
-                                validation_output = (validation_output + ("<p><div class='highlight'>" + validate_message + "</div></p>"))
+                                if not validate_message == "API down":
+                                    if type(validate_four) is list:
+                                        counter = 0
+                                        validation_output = (validation_output + (
+                                                "<p><div class='highlight'>"
+                                                + validate_message
+                                                + "</div><table class='table table-striped tablesize table-bordered'>"
+                                                "<thead><tr><th>Keyword</th><th>Vocabulary</th><th>URI</th></tr>"
+                                                "</thead><tbody>"))
+                                        for keyword in validate_four:
+                                            if counter == 8:
+                                                break
+                                            counter += 1
+                                            validation_output = ((validation_output
+                                                                  + "<tr><td><span "
+                                                                  "class='d-inline-block' tabindex='0' "
+                                                                  "data-toggle='tooltip' " + "title='"
+                                                                  + keyword["description"] + "'>" + "<a href='"
+                                                                  + keyword["vocabulary_url"] + "'>"
+                                                                  + keyword["term"] + "</a>" + "</span>" + "</td><td>"
+                                                                  + keyword["vocabulary"] + "</td><td>"
+                                                                  + keyword["vocabulary_url"]) + "</td></tr>")
+                                        validation_output = validation_output + "</tbody></table></p>"
+                                    elif type(validate_four) is str:
+                                        validation_output = (validation_output + (
+                                                "<p><div class='highlight'>"
+                                                + validate_message + " mit Nachricht: "
+                                                + validate_four
+                                                + "</div></p>"))
+                                elif validate_message == "API down":
+                                    validation_output = (validation_output + ("<p><div class='highlight'>" + validate_message +
+                                                          " mit Nachricht: " + validate_four + "</div></p>"))
 
             if not validation_json["citation"].get("grant_number") == None:
                 if not validation_json["citation"]["grant_number"].get("0") == None:
                     for grants in validation_json["citation"]["grant_number"]:
-                        for grantinfo in validation_json["citation"]["grant_number"][grants]:
-                            grant_information_loc = grantinfo["loc"]
-                            grant_information_message = grantinfo["message"]
-                            if not grantinfo.get("proposed-change") == None:
-                                grant_information_proposedchange = grantinfo["proposed-change"]
-                                validation_output = validation_output + ("<p><table class='table table-striped tablesize table-bordered'><thead><tr>"
-                                                                         "<th>Metadata field</th>"
-                                                                         "<th>Current Value</th>"
-                                                                         "<th>Suggestion</th></tr></thead><tbody>"
-                                                                         "<tr><td>" +
-                                                                         grant_information_loc
-                                                                         + "</td><td class='highlight'>" +
-                                                                         grant_information_message
-                                                                         + "</td><td>" +
-                                                                         grant_information_proposedchange
-                                                                         + "</td></tr></tbody></table></p>")
-                            elif grant_information_message == "OpenAire-API down":
-                                grant_information_proposedchange = grantinfo["proposed-change"]
+                        grant_information_loc = ""
+                        grant_information_message = ""
+                        if type(validation_json["citation"]["grant_number"][grants]) is list:
+                            for grantinfo in validation_json["citation"]["grant_number"][grants]:
+                                grant_information_loc = grantinfo["loc"]
+                                grant_information_message = grantinfo["message"]
+                                if not grantinfo.get("proposed-change") == None:
+                                    grant_information_proposedchange = grantinfo["proposed-change"]
+                                    validation_output = validation_output + (
+                                            "<p><table class='table table-striped tablesize table-bordered'><thead><tr>"
+                                            "<th>Metadata field</th>"
+                                            "<th>Current Value</th>"
+                                            "<th>Suggestion</th></tr></thead><tbody>"
+                                            "<tr><td>" +
+                                            grant_information_loc +
+                                            "</td><td class='highlight'>" +
+                                            grant_information_message +
+                                            "</td><td>" +
+                                            grant_information_proposedchange +
+                                            "</td></tr></tbody></table></p>")
+                        elif type(validation_json["citation"]["grant_number"][grants]) is dict:
+                            grant_information_loc = validation_json["citation"]["grant_number"][grants]["loc"]
+                            grant_information_message = validation_json["citation"]["grant_number"][grants]["message"]
+                            if not validation_json["citation"]["grant_number"][grants]["proposed-change"] is None:
+                                grant_information_proposedchange = validation_json["citation"]["grant_number"][grants]["proposed-change"]
                                 validation_output = validation_output + (
-                                        "<p>" + grant_information_message + " mit Nachricht: <div class='highlight'>"
-                                        + grant_information_proposedchange + "</div></p>")
+                                                "<p><table class='table table-striped tablesize table-bordered'><thead><tr>"
+                                                "<th>Metadata field</th>"
+                                                "<th>Current Value</th>"
+                                                "<th>Suggestion</th></tr></thead><tbody>"
+                                                "<tr><td>" +
+                                                grant_information_loc +
+                                                "</td><td class='highlight'>" +
+                                                grant_information_message + "</td><td>" +
+                                                grant_information_proposedchange +
+                                                "</td></tr></tbody></table></p>")
+                        if (grant_information_message == "OpenAire-API down"
+                                          or grant_information_message == "DaRUS metadata fields for funding have changed"):
+                                        grant_information_proposedchange = grantinfo["proposed-change"]
+                                        validation_output = validation_output + (
+                                                "<p>" + grant_information_message + " mit Nachricht: <div class='highlight'>"
+                                                + grant_information_proposedchange + "</div></p>")
 
             if not validation_json["citation"].get("ds_description") == None:
                 if not validation_json["citation"]["ds_description"].get("0") == None:
@@ -601,30 +662,75 @@ class Publication:
                                                                     + "</td></tr>")
                         validation_output = validation_output + "</tbody></table></p>"
 
+            if not validation_json["citation"].get("topic_classification") == None:
+                if not validation_json["citation"]["topic_classification"].get("0") == None:
+                    for topic_classifications in validation_json["citation"]["topic_classification"]:
+                        for vocabulary in validation_json["citation"]["topic_classification"][topic_classifications]:
+                            validate_four = vocabulary["proposed-changes"]
+                            validate_message = vocabulary["message"]
+                            if type(validate_four) is list:
+                                counter = 0
+                                validation_output = (validation_output + (
+                                                    "<p><div class='highlight'>"
+                                                    + validate_message
+                                                    + "</div><table class='table table-striped tablesize table-bordered'>"
+                                                      "<thead><tr><th>Topic "
+                                                      "Classification</th><th>Vocabulary</th><th>URI</th></tr>"
+                                                      "</thead><tbody>"))
+                                for topic_classification in validate_four:
+                                    if counter == 8:
+                                        break
+                                    counter += 1
+                                    validation_output = ((validation_output
+                                                          + "<tr><td><span class='d-inline-block' tabindex='0' "
+                                                          +  "data-toggle='tooltip' "
+                                                          +  "title='"+ topic_classification["description"] + "'>"
+                                                          +  "<a href='"+ topic_classification["vocabulary_url"] + "'>"
+                                                          + topic_classification["term"] + "</a></span></td><td>"
+                                                          + topic_classification["vocabulary"] + "</td><td>"
+                                                          + topic_classification["vocabulary_url"]) + "</td></tr>")
+                                validation_output = validation_output + "</tbody></table></p>"
+                            elif (not validate_message == "API down"):
+                                validation_output = (validation_output + (
+                                                "<p><div class='highlight'>" + validate_message + " mit Nachricht: "
+                                                + validate_four + "</div></p>"))
+                            elif validate_message == "API down":
+                                validation_output = (validation_output + (
+                                                "<p><div class='highlight'>" + validate_message +
+                                                          " mit Nachricht: " + validate_four + "</div></p>"))
+
             if not validation_json["citation"].get("publication") == None:
                 if not validation_json["citation"]["publication"].get("0") == None:
                     for relatedpublication in validation_json["citation"]["publication"]:
-                        proposed_changes = validation_json["citation"]["publication"][relatedpublication]["proposed-changes"]
-                        message = validation_json["citation"]["publication"][relatedpublication]["message"]
+                        output = ""
+                        message = ""
+                        if type(validation_json["citation"]["publication"][relatedpublication]) is dict:
+                            if "download_url" in validation_json["citation"]["publication"][relatedpublication]:
+                                output = validation_json["citation"]["publication"][relatedpublication]["download_url"]
+                            if "proposed-changes" in validation_json["citation"]["publication"][relatedpublication]:
+                                if validation_json["citation"]["publication"][relatedpublication]["proposed-changes"] != "OK":
+                                    output = validation_json["citation"]["publication"][relatedpublication]["proposed-changes"]
+                            message = validation_json["citation"]["publication"][relatedpublication]["message"]
                         validation_output = (validation_output
-                                                 + ("<p><table class='table table-striped tablesize table-bordered'><thead><tr>"
-                                                    "<th>Metadata field</th>"
-                                                    "<th>Message</th>"
-                                                    "<th>Return Value</th></tr></thead><tbody>"
-                                                    "<tr>"
-                                                    "<td>Related Publication</td>"
-                                                    "<td class='highlight'>" + message + "</td>"
-                                                    "<td>"+ proposed_changes + "</td>"
-                                                    "</tr></tbody></table></p>"))
+                                                     + ("<p><table class='table table-striped tablesize table-bordered'><thead><tr>"
+                                                        "<th>Metadata field</th>"
+                                                        "<th>Message</th>"
+                                                        "<th>Return Value</th></tr></thead><tbody>"
+                                                        "<tr>"
+                                                        "<td>Related Publication</td>"
+                                                        "<td class='highlight'>" + message + "</td>"
+                                                        "<td>"+ output + "</td>"
+                                                        "</tr></tbody></table></p>"))
             validation_output = validation_output + "</html>"
-            return validation_output
+            return noError, validation_output
         except BaseException as e:
-            errorMessage = e.__str__()
+            noError = False
+            errorMessage = e.__str__() + " in line " + e.__traceback__.tb_lineno.__str__()
             if not type(errorMessage) == str:
                  errorMessage = "Es ist ein Fehler bei Erstellen des Validierungsoutputs aufgetreten"
             logging.debug("set_validation_output error thrown: " + errorMessage)
             self.sendErrorMail(tplDict, {"ERRORTHROWN": errorMessage})
-            return {"message": "Error notification sent"}
+            return noError, ""
     # https://stackoverflow.com/questions/37278647/fire-and-forget-python-async-await
     def fire_and_forget(f):
         def wrapped(*args, **kwargs):
@@ -633,7 +739,7 @@ class Publication:
         return wrapped
 
     def validate_and_format(self, tplDict, invocationId):
-        # validation_out = self.validation.validate_dataset(tplDict["datasetId"])
+        #validation_out = self.validation.validate_dataset(tplDict["datasetId"])
 
         if type(validation_out) == str:
             validation_json = json.loads(validation_out)
@@ -642,11 +748,11 @@ class Publication:
 
         validation_out_html = validation_json
         errorMessage = ""
-        noError = True
         if validation_json.get("ERRORTHROWN") == None:
-            validation_out_html = self.set_validation_output(validation_json, tplDict)
+            noError, validation_out_html = self.set_validation_output(validation_json, tplDict)
         else:
             noError = False
+            validation_out_html = ""
             errorMessage = validation_json.get("ERRORTHROWN")
             logging.debug("validate_and_format error thrown: " + errorMessage)
             self.sendErrorMail(tplDict, {"ERRORTHROWN": errorMessage})
@@ -694,7 +800,46 @@ class Publication:
         return authors, editorMails, contactMails, datasetTitle, datasetUrl, description, descriptionHtml
 
     @fire_and_forget
-    def prepare_mail(self, tplDict, invocationId, titleMessage):
+    def prepare_mail(self, tplDict, invocationId, databaseId, curationLabel, titleMessage):
+        try:
+            if not databaseId is None:
+                requests.delete(
+                    credentials["darus"]["baseUrl"] + "/api/datasets/" + str(databaseId) + "/locks?type=InReview",
+                    headers={"X-Dataverse-key": credentials["darus"]["apiKey"]})
+        except BaseException as e:
+            errorMessage = e.__str__()
+            logging.debug("Cannot remove lock inReview: " + errorMessage)
+        try:
+            if not databaseId is None and not curationLabel is None:
+                requests.put(credentials["darus"]["baseUrl"] + "/api/datasets/" + str(databaseId)
+                             + "/curationStatus?label=" + str(curationLabel),
+                             headers={"X-Dataverse-key": credentials["darus"]["apiKey"]})
+        except BaseException as e:
+            errorMessage = e.__str__()
+            logging.debug("Cannot set curation label: " + errorMessage)
+        with open("bypass/bypassed.txt", "r") as bypassed_file:
+            bypassed_ids = bypassed_file.readlines()
+            bypassed_file.close()
+            with open("bypass/bypassed.txt", "a") as bypassed_file:
+                with open("bypass/bypass_ids.txt", "r") as bypass_file:
+                    bypass_ids = bypass_file.readlines()
+                    for bypass_id in bypass_ids:
+                        bypass_id = bypass_id.strip()
+                        if tplDict["datasetId"] == bypass_id:
+                            if not bypass_id in bypassed_ids:
+                                publication.appStatus = "bypassed"
+                                publication.args["invocationId"] = invocationId
+                                publication.args["action"] = "ok"
+                                publication.args["authKey"] = credentials["curator"]["authKey"]
+                                publication.setCalledMethod('PUT')
+                                logging.debug("Now we are waiting for publication ...")
+                                bypassed_file.write(bypass_id)
+                                time.sleep(2)
+                                bypassed_file.close()
+                                bypass_file.close()
+                                return publication.put(invocationId)
+                    bypassed_file.close()
+                    bypass_file.close()
         if (stringToBool(credentials["darus"]["validation"])):
             logging.debug("Now starting the validation process")
 
@@ -833,16 +978,6 @@ class Publication:
                 return {"message": "No datasetId provided"}, 400
             self.setDatabaseId(jsonData["datasetId"])  # database id
             # t = (invocationId,)
-            with open("bypass_ids.txt", "r") as bypass_file:
-                bypass_ids = bypass_file.read().splitlines()
-            if jsonData["datasetGlobalId"] in bypass_ids:
-                self.appStatus = "bypassed"
-                with open("bypassed.txt", "a") as bypass_f:
-                    startUrl = ("{baseUrl}/" + urlPath + "/{id}?authKey={auth}").format(baseUrl=credentials["darus"]["baseUrl"], id=invocationId,
-                                                                                  auth=credentials["curator"]["authKey"])
-
-                    bypass_f.write("{}&action=ok\n".format(startUrl))
-                return {"invocationId": invocationId, "status": self.appStatus, "datasetId": self.datasetId }
 
             alreadyExisting = self.getStatus(invocationId)
             if alreadyExisting is not None:
@@ -886,9 +1021,12 @@ class Publication:
                        "removeLockUrl": "{}removeLock".format(startUrl), "fileDoisOnUrl": "{}fileDoisOn".format(startUrl),
                    "fileDoisOffUrl": "{}fileDoisOff".format(startUrl), "numberOfFiles": "numberOfFilesMessage", "errors": errorStr, "description":
                            description, "validateUrl": "{}validate".format(startUrl),
+                       "fokusReview": "{}fokusreview".format(startUrl), "authorReview": "{}authorreview".format(startUrl),
+                       "deleteLabel": "{}deletelabel".format(startUrl),
                        "descriptionHtml": descriptionHtml, "validationOutput": validation_out, "validationOutputHtml": validation_out_html, }
 
-            self.prepare_mail(tplDict, invocationId, "Neue Veröffentlichung in DaRUS - {}")
+            self.prepare_mail(tplDict, invocationId, self.getDatabaseId(invocationId) , self.curationlabels["fokus"]
+                              ,"Neue Veröffentlichung in DaRUS - {}")
             logging.debug(
                 "Response is: {json}".format(json={'invocationId': invocationId, 'status': self.appStatus, 'datasetId': self.datasetId}))
             return jsonify({'invocationId': invocationId, 'status': self.appStatus, 'datasetId': self.datasetId})
@@ -902,8 +1040,9 @@ class Publication:
         logging.debug("in PUT")
         try:
             jsonData = {};
-            if request.is_json:
-                jsonData = request.get_json()
+            if not self.appStatus is "bypassed":
+                if request.is_json:
+                    jsonData = request.get_json()
             # jsonData = json.loads(args)
             logging.debug("action: {}".format(self.args["action"]))
             # je nach input -> zurueck an Autor mit Kommentar oder publish
@@ -1072,10 +1211,13 @@ class Publication:
                            "fileDoisOnUrl": "{}fileDoisOn".format(startUrl),
                            "fileDoisOffUrl": "{}fileDoisOff".format(startUrl), "numberOfFiles": "numberOfFilesMessage",
                            "errors": errorStr, "description": description, "validateUrl": "{}validate".format(startUrl),
+                           "fokusReview": "{}fokusreview".format(startUrl),
+                           "authorReview": "{}authorreview".format(startUrl),
+                           "deleteLabel": "{}deletelabel".format(startUrl),
                            "descriptionHtml": descriptionHtml, "validationOutput": validation_out,
                            "validationOutputHtml": validation_out_html, }
 
-                self.prepare_mail(tplDict, invocationId, "Revalidierung in DaRUS - {}")
+                self.prepare_mail(tplDict, invocationId, None, None, "Revalidierung in DaRUS - {}")
                 logging.debug("Validation request already started...")
 
                 ret = {"invocationId": invocationId, "status": "Revalidating ...",
@@ -1085,6 +1227,102 @@ class Publication:
                     return output_html(ret)
                 else:
                     return ret
+
+            if self.args["action"] == "fokusreview":
+                responseObject = self.checkAuth(self.args["authKey"], "curator")
+                if responseObject != True:
+                    return responseObject
+                databaseId = self.getDatabaseId(invocationId)
+                if databaseId is None:
+                    return {"message": "Invocation ID {} is not existing".format(invocationId)}, 404
+                try:
+                    response = requests.put(credentials["darus"]["baseUrl"] + "/api/datasets/" + str(databaseId)
+                                       + "/curationStatus?label=" + self.curationlabels["fokus"],
+                                 headers={"X-Dataverse-key": credentials["darus"]["apiKey"]})
+
+                    ret = {"invocationId": invocationId, "status": "curationLabelAdded", "message": "failed"}
+                    if json.loads(response.text)["status"] == "OK":
+                        ret = {"invocationId": invocationId, "status": "curationLabelAdded",
+                               "message": self.curationlabels["fokus"] + " for dataset {}".format(self.getDatasetId(
+                                   invocationId)) }
+
+                        if self.calledMethod == "GET":
+                            return output_html(ret)
+                        else:
+                            return ret
+
+                    if self.calledMethod == "GET":
+                        return output_html(ret)
+                    else:
+                        return ret
+
+                except BaseException as e:
+                    errorMessage = e.__str__()
+                    logging.debug("Cannot set curation label: " + errorMessage)
+
+            if self.args["action"] == "authorreview":
+                responseObject = self.checkAuth(self.args["authKey"], "curator")
+                if responseObject != True:
+                    return responseObject
+                databaseId = self.getDatabaseId(invocationId)
+                if databaseId is None:
+                    return {"message": "Invocation ID {} is not existing".format(invocationId)}, 404
+                try:
+                    response = requests.put(credentials["darus"]["baseUrl"] + "/api/datasets/" + str(databaseId)
+                                       + "/curationStatus?label=" + self.curationlabels["author"],
+                                 headers={"X-Dataverse-key": credentials["darus"]["apiKey"]})
+
+                    ret = {"invocationId": invocationId, "status": "curationLabelAdded", "message": "failed"}
+                    if json.loads(response.text)["status"] == "OK":
+                        ret = {"invocationId": invocationId, "status": "curationLabelAdded",
+                               "message": self.curationlabels["author"] + " for dataset {}".format(self.getDatasetId(
+                                   invocationId)) }
+
+                        if self.calledMethod == "GET":
+                            return output_html(ret)
+                        else:
+                            return ret
+
+                    if self.calledMethod == "GET":
+                        return output_html(ret)
+                    else:
+                        return ret
+
+                except BaseException as e:
+                    errorMessage = e.__str__()
+                    logging.debug("Cannot set curation label: " + errorMessage)
+
+            if self.args["action"] == "deletelabel":
+                responseObject = self.checkAuth(self.args["authKey"], "curator")
+                if responseObject != True:
+                    return responseObject
+                databaseId = self.getDatabaseId(invocationId)
+                if databaseId is None:
+                    return {"message": "Invocation ID {} is not existing".format(invocationId)}, 404
+                try:
+                    response = requests.delete(credentials["darus"]["baseUrl"] + "/api/datasets/" + str(databaseId)
+                                       + "/curationStatus",
+                                 headers={"X-Dataverse-key": credentials["darus"]["apiKey"]})
+
+                    ret = {"invocationId": invocationId, "status": "curationLabelRemoved", "message": "failed"}
+                    if json.loads(response.text)["status"] == "OK":
+                        ret = {"invocationId": invocationId, "status": "curationLabelRemoved",
+                               "message": "Deleted for dataset {}".format(self.getDatasetId(
+                                   invocationId)) }
+
+                        if self.calledMethod == "GET":
+                            return output_html(ret)
+                        else:
+                            return ret
+
+                    if self.calledMethod == "GET":
+                        return output_html(ret)
+                    else:
+                        return ret
+
+                except BaseException as e:
+                    errorMessage = e.__str__()
+                    logging.debug("Cannot set curation label: " + errorMessage)
 
             if self.args["action"] == "fileDoisOff":
                 message = "File DOIs are switched off"
@@ -1160,6 +1398,10 @@ with open("cred/credentials.json", "r") as cred_file:
     if dummy_apiurl(credentials["darus"]["apiBaseUrl"]):
         credentials["darus"]["apiBaseUrl"] = sys.argv[2][len("--apiurl="):]
 
+    # For different server testing
+    # if sys.argv[2][len("--apiurl="):] is not None:
+    #     credentials["darus"]["baseUrl"] = sys.argv[2][len("--apiurl="):]
+
     if os.environ.get('authKeyDaRUS') is not None:
         credentials["darus"]["authKey"] = os.environ['authKeyDaRUS']
     if os.environ.get('authKeyCurator') is not None:
@@ -1227,12 +1469,6 @@ def pubWorkflow(**kwargs):
             return publication.delete(invocationId)
     else:
         return {"message": "Please provide correct URL parameters"}, 400
-
-def stringToBool(boolValue):
-    if boolValue == "True":
-        return True
-    elif boolValue == "False":
-        return False
 
 if __name__ == "__main__":
     app.run(stringToBool(debug=credentials["darus"]["debug"]))
