@@ -267,6 +267,17 @@ class Publication:
         except:
             None
 
+    def getInvocationId(self, datasetId):
+        try:
+            res = self.conn.execute('SELECT invocationId FROM run WHERE datasetId=? AND status = "new"', (datasetId,))
+            r = res.fetchone()
+            if r:
+                return r[0]
+            else:
+                return None
+        except:
+            None
+
     def getDatasetIdByPostInvoc(self, postInvocationId):
         try:
             res = self.conn.execute("SELECT datasetID FROM run WHERE postInvocationId=?", (postInvocationId,))
@@ -526,8 +537,12 @@ class Publication:
                         for vocabulary in validation_json["citation"]["keyword"][keywords]:
                             if type(vocabulary) is list:
                                 for vocab in vocabulary:
-                                    validate_four = vocab["proposed-changes"]
-                                    validate_message = vocab["message"]
+                                    if type(vocab) is list:
+                                        validate_four = vocab[0]["proposed-changes"]
+                                        validate_message = vocab[0]["message"]
+                                    else:
+                                        validate_four = vocab["proposed-changes"]
+                                        validate_message = vocab["message"]
                                     if type(validate_four) is list:
                                         counter = 0
                                         validation_output = (validation_output + (
@@ -823,23 +838,23 @@ class Publication:
             with open("bypass/bypassed.txt", "a") as bypassed_file:
                 with open("bypass/bypass_ids.txt", "r") as bypass_file:
                     bypass_ids = bypass_file.readlines()
-                    for bypass_id in bypass_ids:
-                        bypass_id = bypass_id.strip()
-                        if tplDict["datasetId"] == bypass_id:
+                    if tplDict["datasetId"] in bypass_ids:
+                        for bypass_id in bypass_ids:
+                            bypass_id = bypass_id.strip()
                             if not bypass_id in bypassed_ids:
                                 publication.appStatus = "bypassed"
-                                publication.args["invocationId"] = invocationId
+                                publication.args["invocationId"] = self.getInvocationId(bypass_id)
                                 publication.args["action"] = "ok"
                                 publication.args["authKey"] = credentials["curator"]["authKey"]
                                 publication.setCalledMethod('PUT')
                                 logging.debug("Now we are waiting for publication ...")
-                                bypassed_file.write(bypass_id)
+                                bypassed_file.write(bypass_id + "\n")
                                 time.sleep(2)
-                                bypassed_file.close()
-                                bypass_file.close()
-                                return publication.put(invocationId)
-                    bypassed_file.close()
-                    bypass_file.close()
+                                publication.put(self.getInvocationId(bypass_id))
+                                logging.debug(bypass_id + " has been published.")
+                        bypassed_file.close()
+                        bypass_file.close()
+                        return
         if (stringToBool(credentials["darus"]["validation"])):
             logging.debug("Now starting the validation process")
 
