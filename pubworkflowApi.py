@@ -1,4 +1,5 @@
 import json
+import csv
 import logging
 import os.path
 import random
@@ -8,6 +9,7 @@ import string
 import sys
 import re
 import asyncio
+import threading
 import time
 from datetime import datetime
 from email.message import EmailMessage
@@ -73,7 +75,7 @@ def valid_uuid(uuid):
     return bool(match)
 
 def valid_action(action):
-    regex = re.compile('removeLock|addLock|cancel|ok|validate|fokusreview|authorreview|deletelabel')
+    regex = re.compile('removeLock|addLock|cancel|ok|validate|fokusreview|authorreview|deletelabel|reindex|count')
     match = regex.match(action)
     return bool(match)
 
@@ -95,22 +97,71 @@ logging.basicConfig(filename="logs/pubWorkflow.log", level=logging.DEBUG)
 
 class Publication:
     def __init__(self):
-        self.errors = []
-        self.datasetId = None
-        self.databaseId = None
+        self._local = threading.local()
         self.conn = None
-        self.appStatus = "undefined"
         self.connOpen = False
-        self.calledMethod = None
         if stringToBool(credentials["darus"]["validation"]):
             self.validation = Validation(credentials["darus"]["baseUrl"], credentials["darus"]["apiKey"])
-
-        self.args = {}
         self.curationlabels = {"fokus": "In Review by FoKUS", "author": "Waiting for Feedback from Author"}
+        self.dvIds = {}
+        self.contacts = {}
         self.connectToDb("db/pubworkflow.db")
+        self.get_all_dataverses()
 
     def __del__(self):
         self.conn.close()
+
+    @property
+    def errors(self):
+        if not hasattr(self._local, 'errors'):
+            self._local.errors = []
+        return self._local.errors
+
+    @errors.setter
+    def errors(self, value):
+        self._local.errors = value
+
+    @property
+    def datasetId(self):
+        return getattr(self._local, 'datasetId', None)
+
+    @datasetId.setter
+    def datasetId(self, value):
+        self._local.datasetId = value
+
+    @property
+    def databaseId(self):
+        return getattr(self._local, 'databaseId', None)
+
+    @databaseId.setter
+    def databaseId(self, value):
+        self._local.databaseId = value
+
+    @property
+    def appStatus(self):
+        return getattr(self._local, 'appStatus', 'undefined')
+
+    @appStatus.setter
+    def appStatus(self, value):
+        self._local.appStatus = value
+
+    @property
+    def calledMethod(self):
+        return getattr(self._local, 'calledMethod', None)
+
+    @calledMethod.setter
+    def calledMethod(self, value):
+        self._local.calledMethod = value
+
+    @property
+    def args(self):
+        if not hasattr(self._local, 'args'):
+            self._local.args = {}
+        return self._local.args
+
+    @args.setter
+    def args(self, value):
+        self._local.args = value
 
     def setCalledMethod(self, method):
         self.calledMethod = method
@@ -416,6 +467,43 @@ class Publication:
 
         roleMails = {"editors": edMails, "curators": cuMails}
         return roleMails
+
+    def get_collection_id(self, doi: str) -> int:
+        # Step 1: resolve DOI to numeric dataset ID
+        header = {"X-Dataverse-key": credentials["darus"]["apiKey"], }
+        dataset = json.loads(requests.get("{}/api/datasets/:persistentId/?persistentId={}"
+                                           .format(credentials["darus"]["baseUrl"], doi),headers=header).text)
+        dataset_id = dataset["data"]["id"]
+
+        # Step 2: search by entity ID to find the collection alias
+        search = json.loads(requests.get("{}/api/search?q=entityId:{}&type=dataset&show_entity_ids=true"
+                                         .format(credentials["darus"]["baseUrl"], dataset_id),headers=header).text)
+        items = search["data"]["items"]
+        if not items:
+            raise SystemExit(f"No search results for dataset ID {dataset_id}")
+        collection_alias = items[0]["identifier_of_dataverse"]
+
+        # Step 3: resolve alias to numeric collection ID
+        dataverse = json.loads(requests.get("{}/api/dataverses/{}"
+                                             .format(credentials["darus"]["baseUrl"],collection_alias),headers=header).text)
+        return dataverse["data"]["id"]
+
+    def getsubdataverses(self, subid: str, dvalias: str, dvIds: dict):
+        header = {"X-Dataverse-key": credentials["darus"]["apiKey"], }
+        dverse = json.loads(
+            requests.get(credentials["darus"]["baseUrl"] + "/api/dataverses/" + dvalias, headers=header).text)
+        if "data" in dverse:
+            dvIds[str(dverse["data"]["id"])] = dvalias
+        subdataverses = json.loads(requests.get(credentials["darus"]["baseUrl"] + "/api/dataverses/" + subid + "/contents", headers=header).text)
+        if "data" in subdataverses:
+            for subdv in subdataverses["data"]:
+                if subdv["type"] == "dataverse":
+                    showsubdv = credentials["darus"]["baseUrl"] + "/api/dataverses/" + str(subdv["id"])
+                    subcollection = json.loads(requests.get(showsubdv, headers=header).text)
+                    if "data" in subcollection and "id" in subcollection["data"]:
+                        dvIds[str(subcollection["data"]["id"])] = dvalias
+                        self.getsubdataverses(str(subcollection["data"]["id"]), dvalias, dvIds)
+
     def getValidationStyle(self):
         validationStyle = (""
         + "<style type='text/css'>"
@@ -816,6 +904,24 @@ class Publication:
 
     @fire_and_forget
     def prepare_mail(self, tplDict, invocationId, databaseId, curationLabel, titleMessage):
+        with open("bypass/bypassed.txt", "r") as bypassed_file:
+            bypassed_ids = bypassed_file.read().splitlines()
+            bypassed_file.close()
+            bypass_id = str(tplDict["datasetId"])
+            with open("bypass/bypassed.txt", "a") as bypassed_file:
+                with open("bypass/bypass_ids.txt", "r") as bypass_file:
+                    bypass_ids = bypass_file.read().splitlines()
+                    if bypass_id in bypass_ids:
+                        bypass_id = bypass_id.strip()
+                        if not bypass_id in bypassed_ids:
+                            logging.debug("Now we are waiting for publication ...")
+                            bypassed_file.write(bypass_id + "\n")
+                            bypassed_file.close()
+                            bypass_file.close()
+                            time.sleep(2)
+                            return publication.bypass(invocationId)
+                    bypassed_file.close()
+                    bypass_file.close()
         try:
             if not databaseId is None:
                 requests.delete(
@@ -832,29 +938,19 @@ class Publication:
         except BaseException as e:
             errorMessage = e.__str__()
             logging.debug("Cannot set curation label: " + errorMessage)
-        with open("bypass/bypassed.txt", "r") as bypassed_file:
-            bypassed_ids = bypassed_file.readlines()
-            bypassed_file.close()
-            with open("bypass/bypassed.txt", "a") as bypassed_file:
-                with open("bypass/bypass_ids.txt", "r") as bypass_file:
-                    bypass_ids = bypass_file.readlines()
-                    if tplDict["datasetId"] in bypass_ids:
-                        for bypass_id in bypass_ids:
-                            bypass_id = bypass_id.strip()
-                            if not bypass_id in bypassed_ids:
-                                publication.appStatus = "bypassed"
-                                publication.args["invocationId"] = self.getInvocationId(bypass_id)
-                                publication.args["action"] = "ok"
-                                publication.args["authKey"] = credentials["curator"]["authKey"]
-                                publication.setCalledMethod('PUT')
-                                logging.debug("Now we are waiting for publication ...")
-                                bypassed_file.write(bypass_id + "\n")
-                                time.sleep(2)
-                                publication.put(self.getInvocationId(bypass_id))
-                                logging.debug(bypass_id + " has been published.")
-                        bypassed_file.close()
-                        bypass_file.close()
-                        return
+        dvId = str(self.get_collection_id(tplDict["datasetId"]))
+        contactMail = ""
+        dvAlias = ""
+        dvIds = set(self.dvIds.keys())
+        dataStewardInfo = ""
+        if dvId in dvIds:
+            contactMail = self.contacts.get(self.dvIds[dvId])
+            dvAlias = self.dvIds[dvId]
+            dataStewardInfo = ("<div style='color: red;'> Bitte eine Mail per CC an den Data Steward: '"
+                               + contactMail + "' im Root-DV: '" + dvAlias + "'</div>")
+        else:
+            dataStewardInfo = ("<div style='color: green;'> Es braucht keine Mail an einen Data Steward gesendet "
+                               "werden.</div>")
         if (stringToBool(credentials["darus"]["validation"])):
             logging.debug("Now starting the validation process")
 
@@ -886,6 +982,8 @@ class Publication:
 
                     tplDict["validationOutputHtml"] = validation_out_html
                     tplDict["numberOfFiles"] = numberOfFilesMessage
+
+                    tplDict["dataStewardInfo"] = dataStewardInfo
 
                     logging.debug("datasetId: {}".format(tplDict["datasetId"]))
 
@@ -923,6 +1021,8 @@ class Publication:
                 tplDict["validationOutputHtml"] = validation_out_html
                 tplDict["numberOfFiles"] = numberOfFilesMessage
 
+                tplDict["dataStewardInfo"] = dataStewardInfo
+
                 logging.debug("datasetId: {}".format(tplDict["datasetId"]))
 
                 if credentials["darus"]["mailer"] == "True":
@@ -948,6 +1048,52 @@ class Publication:
             return {"input": inputVar, "status": "running"}
         else:
             return {"message": "empty"}, 204
+
+    def bypass(self, invocationId):
+        url = "{baseUrl}/api/workflows/{id}".format(baseUrl=credentials["darus"]["apiBaseUrl"], id=invocationId)
+        # hier PUMA-POST der Veröffentlichung
+        try:
+            self.callDarusAPI(url, "post", expectedCode=202, data="OK", nodata=True)
+        except ApiCallFailedException as e:
+            ret = json.loads(str(e)[str(e).index('{"status"'):])
+            if self.calledMethod == "GET":
+                return output_html(ret)
+            else:
+                return ret, 401
+
+        self.setStatus(invocationId, "finished")
+        self.setDate(invocationId, "published")
+
+        return {"invocationId": invocationId, "status": "finished"}
+
+    @fire_and_forget
+    def get_all_dataverses(self):
+        header = {"X-Dataverse-key": credentials["darus"]["apiKey"], }
+        new_contacts = {}
+        new_dvIds = {}
+        with open('contacts/contacts.csv', 'r', newline='') as f:
+            reader = csv.reader(f, delimiter=',')
+            for row in reader:
+                new_contacts[row[0]] = row[1]
+
+        for dvalias, value in new_contacts.items():
+            dverse = json.loads(
+                requests.get(credentials["darus"]["baseUrl"] + "/api/dataverses/" + dvalias, headers=header).text)
+            if "data" in dverse:
+                new_dvIds[str(dverse["data"]["id"])] = dvalias
+                self.getsubdataverses(str(dverse["data"]["id"]), dvalias, new_dvIds)
+            dverses = json.loads(requests.get(credentials["darus"]["baseUrl"] + "/api/dataverses/" + dvalias + "/contents",
+                                              headers=header).text)
+            if "data" in dverses:
+                for dv in dverses["data"]:
+                    if dv["type"] == "dataverse":
+                        showdv = credentials["darus"]["baseUrl"] + "/api/dataverses/" + str(dv["id"])
+                        collection = json.loads(requests.get(showdv, headers=header).text)
+                        if "data" in collection and "id" in collection["data"]:
+                            new_dvIds[str(collection["data"]["id"])] = dvalias
+                            self.getsubdataverses(str(collection["data"]["id"]), dvalias, new_dvIds)
+        self.contacts = new_contacts
+        self.dvIds = new_dvIds
 
     def get(self, invocationId):
         if self.calledMethod is None:
@@ -1030,14 +1176,16 @@ class Publication:
 
             startUrl = ("{baseUrl}/" + urlPath + "/{id}/{auth}/").format(baseUrl=credentials["darus"]["baseUrl"], id=invocationId,
                                                                    auth=credentials["curator"]["authKey"])
-
             tplDict = {"datasetDisplayName": datasetTitle, "datasetId": self.datasetId, "datasetUrl": datasetUrl, "testrailUrl": runUrl,
                        "releaseUrl": "{}ok".format(startUrl), "lockUrl": "{}addLock".format(startUrl), "cancelUrl": "{}cancel".format(startUrl),
                        "removeLockUrl": "{}removeLock".format(startUrl), "fileDoisOnUrl": "{}fileDoisOn".format(startUrl),
                    "fileDoisOffUrl": "{}fileDoisOff".format(startUrl), "numberOfFiles": "numberOfFilesMessage", "errors": errorStr, "description":
                            description, "validateUrl": "{}validate".format(startUrl),
+                       "reindexUrl": "{}reindex".format(startUrl),
+                       "countUrl": "{}count".format(startUrl),
                        "fokusReview": "{}fokusreview".format(startUrl), "authorReview": "{}authorreview".format(startUrl),
                        "deleteLabel": "{}deletelabel".format(startUrl),
+                       "dataStewardInfo": "dataStewardInfo",
                        "descriptionHtml": descriptionHtml, "validationOutput": validation_out, "validationOutputHtml": validation_out_html, }
 
             self.prepare_mail(tplDict, invocationId, self.getDatabaseId(invocationId) , self.curationlabels["fokus"]
@@ -1226,6 +1374,8 @@ class Publication:
                            "fileDoisOnUrl": "{}fileDoisOn".format(startUrl),
                            "fileDoisOffUrl": "{}fileDoisOff".format(startUrl), "numberOfFiles": "numberOfFilesMessage",
                            "errors": errorStr, "description": description, "validateUrl": "{}validate".format(startUrl),
+                           "reindexUrl": "{}reindex".format(startUrl),
+                           "countUrl": "{}count".format(startUrl),
                            "fokusReview": "{}fokusreview".format(startUrl),
                            "authorReview": "{}authorreview".format(startUrl),
                            "deleteLabel": "{}deletelabel".format(startUrl),
@@ -1237,6 +1387,38 @@ class Publication:
 
                 ret = {"invocationId": invocationId, "status": "Revalidating ...",
                        "message": "Publication workflow will revalidate for dataset {}".format(datasetId), }
+
+                if self.calledMethod == "GET":
+                    return output_html(ret)
+                else:
+                    return ret
+
+            if self.args["action"] == "reindex":
+                responseObject = self.checkAuth(self.args["authKey"], "curator")
+                if responseObject != True:
+                    return responseObject
+
+                logging.debug("Reindexing dataverses ...")
+
+                self.get_all_dataverses()
+
+                ret = {"invocationId": invocationId, "status": "Reindexing dataverses ...",
+                       "message": "Reindexing dataverses ... can take a while", }
+
+                if self.calledMethod == "GET":
+                    return output_html(ret)
+                else:
+                    return ret
+
+            if self.args["action"] == "count":
+                responseObject = self.checkAuth(self.args["authKey"], "curator")
+                if responseObject != True:
+                    return responseObject
+
+                logging.debug("Counting dataverses ...")
+
+                ret = {"invocationId": invocationId, "status": "Counted dataverses ...",
+                       "message": "Counted dataverses ... and found {}".format(len(set(self.dvIds.keys()))), }
 
                 if self.calledMethod == "GET":
                     return output_html(ret)
