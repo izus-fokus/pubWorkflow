@@ -98,8 +98,7 @@ logging.basicConfig(filename="logs/pubWorkflow.log", level=logging.DEBUG)
 class Publication:
     def __init__(self):
         self._local = threading.local()
-        self.conn = None
-        self.connOpen = False
+        self._bypass_lock = threading.Lock()
         if stringToBool(credentials["darus"]["validation"]):
             self.validation = Validation(credentials["darus"]["baseUrl"], credentials["darus"]["apiKey"])
         self.curationlabels = {"fokus": "In Review by FoKUS", "author": "Waiting for Feedback from Author"}
@@ -109,7 +108,8 @@ class Publication:
         self.get_all_dataverses()
 
     def __del__(self):
-        self.conn.close()
+        if self.conn is not None:
+            self.conn.close()
 
     @property
     def errors(self):
@@ -162,6 +162,22 @@ class Publication:
     @args.setter
     def args(self, value):
         self._local.args = value
+
+    @property
+    def conn(self):
+        return getattr(self._local, 'conn', None)
+
+    @conn.setter
+    def conn(self, value):
+        self._local.conn = value
+
+    @property
+    def connOpen(self):
+        return getattr(self._local, 'connOpen', False)
+
+    @connOpen.setter
+    def connOpen(self, value):
+        self._local.connOpen = value
 
     def setCalledMethod(self, method):
         self.calledMethod = method
@@ -904,24 +920,21 @@ class Publication:
 
     @fire_and_forget
     def prepare_mail(self, tplDict, invocationId, databaseId, curationLabel, titleMessage):
-        with open("bypass/bypassed.txt", "r") as bypassed_file:
-            bypassed_ids = bypassed_file.read().splitlines()
-            bypassed_file.close()
-            bypass_id = str(tplDict["datasetId"])
-            with open("bypass/bypassed.txt", "a") as bypassed_file:
-                with open("bypass/bypass_ids.txt", "r") as bypass_file:
-                    bypass_ids = bypass_file.read().splitlines()
-                    if bypass_id in bypass_ids:
-                        bypass_id = bypass_id.strip()
-                        if not bypass_id in bypassed_ids:
-                            logging.debug("Now we are waiting for publication ...")
-                            bypassed_file.write(bypass_id + "\n")
-                            bypassed_file.close()
-                            bypass_file.close()
-                            time.sleep(2)
-                            return publication.bypass(invocationId)
-                    bypassed_file.close()
-                    bypass_file.close()
+        should_bypass = False
+        with self._bypass_lock:
+            with open("bypass/bypassed.txt", "r") as f:
+                bypassed_ids = f.read().splitlines()
+            bypass_id = str(tplDict["datasetId"]).strip()
+            with open("bypass/bypass_ids.txt", "r") as f:
+                bypass_ids = f.read().splitlines()
+            if bypass_id in bypass_ids and bypass_id not in bypassed_ids:
+                logging.debug("Now we are waiting for publication ...")
+                with open("bypass/bypassed.txt", "a") as f:
+                    f.write(bypass_id + "\n")
+                should_bypass = True
+        if should_bypass:
+            time.sleep(2)
+            return publication.bypass(invocationId)
         try:
             if not databaseId is None:
                 requests.delete(
