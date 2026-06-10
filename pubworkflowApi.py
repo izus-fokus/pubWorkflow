@@ -21,7 +21,7 @@ from string import Template
 
 import requests
 from flask import Response, request, Flask, jsonify
-#from dvValidation.functions.validate import Validation
+from dvValidation.functions.validate import Validation
 from requests.auth import HTTPBasicAuth
 
 from pubWorkflowExceptions import ApiCallFailedException
@@ -75,7 +75,7 @@ def valid_uuid(uuid):
     return bool(match)
 
 def valid_action(action):
-    regex = re.compile('removeLock|addLock|cancel|ok|validate|fokusreview|authorreview|deletelabel|reindex|count')
+    regex = re.compile('removeLock|addLock|cancel|ok|validate|fokusreview|authorreview|deletelabel|contacts')
     match = regex.match(action)
     return bool(match)
 
@@ -102,10 +102,9 @@ class Publication:
         if stringToBool(credentials["darus"]["validation"]):
             self.validation = Validation(credentials["darus"]["baseUrl"], credentials["darus"]["apiKey"])
         self.curationlabels = {"fokus": "In Review by FoKUS", "author": "Waiting for Feedback from Author"}
-        self.dvIds = {}
         self.contacts = {}
+        self.get_contacts()
         self.connectToDb("db/pubworkflow.db")
-        self.get_all_dataverses()
 
     def __del__(self):
         if self.conn is not None:
@@ -504,21 +503,33 @@ class Publication:
                                              .format(credentials["darus"]["baseUrl"],collection_alias),headers=header).text)
         return dataverse["data"]["id"]
 
-    def getsubdataverses(self, subid: str, dvalias: str, dvIds: dict):
+    def get_contacts(self):
+        new_contacts = {}
+        with open('contacts/contacts.csv', 'r', newline='') as f:
+            reader = csv.reader(f, delimiter=',')
+            for row in reader:
+                new_contacts[row[0]] = row[1]
+        f.close()
+        self.contacts = new_contacts
+
+    def get_root_dv(self, ownerId):
+
         header = {"X-Dataverse-key": credentials["darus"]["apiKey"], }
-        dverse = json.loads(
-            requests.get(credentials["darus"]["baseUrl"] + "/api/dataverses/" + dvalias, headers=header).text)
-        if "data" in dverse:
-            dvIds[str(dverse["data"]["id"])] = dvalias
-        subdataverses = json.loads(requests.get(credentials["darus"]["baseUrl"] + "/api/dataverses/" + subid + "/contents", headers=header).text)
-        if "data" in subdataverses:
-            for subdv in subdataverses["data"]:
-                if subdv["type"] == "dataverse":
-                    showsubdv = credentials["darus"]["baseUrl"] + "/api/dataverses/" + str(subdv["id"])
-                    subcollection = json.loads(requests.get(showsubdv, headers=header).text)
-                    if "data" in subcollection and "id" in subcollection["data"]:
-                        dvIds[str(subcollection["data"]["id"])] = dvalias
-                        self.getsubdataverses(str(subcollection["data"]["id"]), dvalias, dvIds)
+        collection = json.loads(
+            requests.get("{}/api/dataverses/{}".format(credentials["darus"]["baseUrl"], ownerId),
+                         headers=header).text)
+
+        dvAliases = set(self.contacts.keys())
+
+        if collection["data"].get("ownerId"):
+
+            if collection["data"]["alias"] in dvAliases:
+                return True, collection["data"]["alias"]
+            else:
+                return self.get_root_dv(collection["data"]["ownerId"])
+
+        else:
+            return False, collection["data"]["alias"]
 
     def getValidationStyle(self):
         validationStyle = (""
@@ -858,7 +869,7 @@ class Publication:
         return wrapped
 
     def validate_and_format(self, tplDict, invocationId):
-        #validation_out = self.validation.validate_dataset(tplDict["datasetId"])
+        validation_out = self.validation.validate_dataset(tplDict["datasetId"])
 
         if type(validation_out) == str:
             validation_json = json.loads(validation_out)
@@ -951,14 +962,12 @@ class Publication:
         except BaseException as e:
             errorMessage = e.__str__()
             logging.debug("Cannot set curation label: " + errorMessage)
-        dvId = str(self.get_collection_id(tplDict["datasetId"]))
+        ownerId = str(self.get_collection_id(tplDict["datasetId"]))
+        found, dvAlias = self.get_root_dv(ownerId)
         contactMail = ""
-        dvAlias = ""
-        dvIds = set(self.dvIds.keys())
         dataStewardInfo = ""
-        if dvId in dvIds:
-            contactMail = self.contacts.get(self.dvIds[dvId])
-            dvAlias = self.dvIds[dvId]
+        if found:
+            contactMail = self.contacts.get(dvAlias)
             dataStewardInfo = ("<div style='color: red;'> Bitte eine Mail per CC an den Data Steward: '"
                                + contactMail + "' im Root-DV: '" + dvAlias + "'</div>")
         else:
@@ -1079,35 +1088,6 @@ class Publication:
 
         return {"invocationId": invocationId, "status": "finished"}
 
-    @fire_and_forget
-    def get_all_dataverses(self):
-        header = {"X-Dataverse-key": credentials["darus"]["apiKey"], }
-        new_contacts = {}
-        new_dvIds = {}
-        with open('contacts/contacts.csv', 'r', newline='') as f:
-            reader = csv.reader(f, delimiter=',')
-            for row in reader:
-                new_contacts[row[0]] = row[1]
-
-        for dvalias, value in new_contacts.items():
-            dverse = json.loads(
-                requests.get(credentials["darus"]["baseUrl"] + "/api/dataverses/" + dvalias, headers=header).text)
-            if "data" in dverse:
-                new_dvIds[str(dverse["data"]["id"])] = dvalias
-                self.getsubdataverses(str(dverse["data"]["id"]), dvalias, new_dvIds)
-            dverses = json.loads(requests.get(credentials["darus"]["baseUrl"] + "/api/dataverses/" + dvalias + "/contents",
-                                              headers=header).text)
-            if "data" in dverses:
-                for dv in dverses["data"]:
-                    if dv["type"] == "dataverse":
-                        showdv = credentials["darus"]["baseUrl"] + "/api/dataverses/" + str(dv["id"])
-                        collection = json.loads(requests.get(showdv, headers=header).text)
-                        if "data" in collection and "id" in collection["data"]:
-                            new_dvIds[str(collection["data"]["id"])] = dvalias
-                            self.getsubdataverses(str(collection["data"]["id"]), dvalias, new_dvIds)
-        self.contacts = new_contacts
-        self.dvIds = new_dvIds
-
     def get(self, invocationId):
         if self.calledMethod is None:
             self.calledMethod = "GET"
@@ -1194,8 +1174,7 @@ class Publication:
                        "removeLockUrl": "{}removeLock".format(startUrl), "fileDoisOnUrl": "{}fileDoisOn".format(startUrl),
                    "fileDoisOffUrl": "{}fileDoisOff".format(startUrl), "numberOfFiles": "numberOfFilesMessage", "errors": errorStr, "description":
                            description, "validateUrl": "{}validate".format(startUrl),
-                       "reindexUrl": "{}reindex".format(startUrl),
-                       "countUrl": "{}count".format(startUrl),
+                       "contactsUrl": "{}contacts".format(startUrl),
                        "fokusReview": "{}fokusreview".format(startUrl), "authorReview": "{}authorreview".format(startUrl),
                        "deleteLabel": "{}deletelabel".format(startUrl),
                        "dataStewardInfo": "dataStewardInfo",
@@ -1387,8 +1366,7 @@ class Publication:
                            "fileDoisOnUrl": "{}fileDoisOn".format(startUrl),
                            "fileDoisOffUrl": "{}fileDoisOff".format(startUrl), "numberOfFiles": "numberOfFilesMessage",
                            "errors": errorStr, "description": description, "validateUrl": "{}validate".format(startUrl),
-                           "reindexUrl": "{}reindex".format(startUrl),
-                           "countUrl": "{}count".format(startUrl),
+                           "contactsUrl": "{}contacts".format(startUrl),
                            "fokusReview": "{}fokusreview".format(startUrl),
                            "authorReview": "{}authorreview".format(startUrl),
                            "deleteLabel": "{}deletelabel".format(startUrl),
@@ -1406,32 +1384,17 @@ class Publication:
                 else:
                     return ret
 
-            if self.args["action"] == "reindex":
+            if self.args["action"] == "contacts":
                 responseObject = self.checkAuth(self.args["authKey"], "curator")
                 if responseObject != True:
                     return responseObject
 
-                logging.debug("Reindexing dataverses ...")
+                self.get_contacts()
 
-                self.get_all_dataverses()
+                logging.debug("Reloading contacts ...")
 
-                ret = {"invocationId": invocationId, "status": "Reindexing dataverses ...",
-                       "message": "Reindexing dataverses ... can take a while", }
-
-                if self.calledMethod == "GET":
-                    return output_html(ret)
-                else:
-                    return ret
-
-            if self.args["action"] == "count":
-                responseObject = self.checkAuth(self.args["authKey"], "curator")
-                if responseObject != True:
-                    return responseObject
-
-                logging.debug("Counting dataverses ...")
-
-                ret = {"invocationId": invocationId, "status": "Counted dataverses ...",
-                       "message": "Counted dataverses ... and found {}".format(len(set(self.dvIds.keys()))), }
+                ret = {"invocationId": invocationId, "status": "Reloading contacts ...",
+                       "message": "Reloading contacts ... and found {}".format(len(set(self.contacts.keys()))), }
 
                 if self.calledMethod == "GET":
                     return output_html(ret)
